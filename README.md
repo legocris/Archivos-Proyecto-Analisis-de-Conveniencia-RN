@@ -23,7 +23,7 @@ Example of the comparison for the solution to the Spiral problem by 9-neuron neu
 ---
 
 ## Español
-# Archivos-Proyecto-Analisis-de-Convergencia-RN
+# Archivos-Proyecto-Analisis-de-Conveniencia-RN
 Archivos usados para hacer el Proyecto Integrador de Análisis de Convergencia de Redes Neuronales Angostas contra Profundas usando el perceptrón para problemas de clasificación. 
 
 El proyecto fue entregado como **Proyecto Integrador de Modelación Matemática en la Licenciatura en Matemáticas. CUCEI. UDG**.
