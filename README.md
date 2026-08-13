@@ -1,5 +1,5 @@
 ## English
-# NN-Convergence-Analysis-Project-Files
+# NN-Comparitive-Analysis-Project-Files
 Files used to make the Capstone Project on the Comparative Analysis of Shallow vs Deep Neural Networks using the Perceptron for Classification Problems. 
 
 The project was submitted as the **Mathematical Modeling Capstone Project for the Bachelor's Degree in Mathematics. CUCEI. UDG**.
