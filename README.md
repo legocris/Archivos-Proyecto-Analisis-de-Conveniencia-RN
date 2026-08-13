@@ -14,7 +14,7 @@ The project can be found in [ProyectoIntegrador[en].pdf](/ProyectoIntegrador[en]
 Each folder includes the Preprocessed data for a classification problem. The data located in the `/Bin` sub-folder is fed into the `Red.exe` program, where it is processed by neural networks with varying numbers of layers and neurons using the Backpropagation algorithm to solve each classification problem. The training results for each neural network are exported to the `Reg` folder, to finally be processed by a Python script, `analisis_de_registros.py`, which converts them into readable `.xlss` files and `.png` graphs.
 
 To obtain the datasets and preprocess them for subsequent training in CUDA, the script "generate_cuda_datasets.py" was used.
-The main file that trains the neural networks is "Red.cu", and the implementation of the Backpropagation algorithm within it was entirely written by me without AI assistance.
+The main file that trains the neural networks is "Red.cu", it implements the Backpropagation algorithm using CUDA BLAS API.
 
 <img width="1600" height="700" alt="imagen" src="https://github.com/user-attachments/assets/7efcf2aa-c0bc-4c47-bccc-3c32ed82c44e" />
 
@@ -38,7 +38,7 @@ El proyecto está en [ProyectoIntegrador[es].pdf](ProyectoIntegrador[es].pdf).
 Cada carpeta incluye los datos Preprocesados de un problema de clasificación. Esos datos que están en la sub-carpeta `/Bin` son introducidos en el programa `Red.exe` y ahí son procesados por redes neuronales de distintos números de capas y neuronas mediante el algoritmo de Backpropagation para la solución de cada problema de clasificación. Los resultados del entrenamiento de cada una de las redes neuronales son expuestos en la carpeta `Reg` para finalmente ser procesados por un script de python `analisis_de_registros.py` que los convierte a archivos legibles `.xlss` y gráficas `.png`.
 
 Para obtener los datasets y preprocesarlos para su posterior entrenamiento en CUDA se usó el script "generate_cuda_datasets.py".
-El archivo principal que entrena las redes neuronales es "Red.cu" y la implementación del algoritmo de Backpropagation en él fue enteramente escrita por mí sin ayuda de IA.
+El archivo principal que entrena las redes neuronales es "Red.cu" y la implementación del algoritmo de Backpropagation se hizo en sobre la API de Cuda BLAS. 
 
 <img width="1600" height="700" alt="imagen" src="https://github.com/user-attachments/assets/7efcf2aa-c0bc-4c47-bccc-3c32ed82c44e" />
 
