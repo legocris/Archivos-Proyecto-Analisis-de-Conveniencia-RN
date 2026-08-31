@@ -542,7 +542,8 @@ char* getFname(const char* fpath) {
 }
 
 void mostrar_ayuda(const char *nombre_programa) {
-    printf("Uso: %s [OPCIONES]...\n", nombre_programa);
+    printf("Uso: %s [CARPETA] [OPCIONES]...\n", nombre_programa);
+    printf("  CARPETA             Directorio del problema (opcional, primer argumento). Por defecto: el actual.\n");
     printf("Opciones (nombre corto | nombre largo):\n");
     printf("  -p | --Paso         Valor de Paso (float). Actual: %f\n", Paso);
     printf("  -g | --Gamma        Inercia Gamma (float). Actual: %f\n", Gamma);
@@ -557,8 +558,19 @@ void mostrar_ayuda(const char *nombre_programa) {
 }
 
 int main(int argc, char *argv[]) {
-    // El bucle comienza en i=1 porque argv[0] es el nombre del programa
-    for (int i = 1; i < argc; i++) {
+    // Primer argumento opcional: la carpeta del problema (si no empieza con '-').
+    // Si se da, nos movemos ahi y el resto (Bin/, Reg/, Bin/Pesos/) queda relativo a ella.
+    int arg0 = 1;
+    if (argc > 1 && argv[1][0] != '-') {
+        if (_chdir(argv[1]) != 0) {
+            fprintf(stderr, "Error: no se pudo entrar a la carpeta %s\n", argv[1]);
+            return 1;
+        }
+        arg0 = 2;
+    }
+
+    // El bucle empieza despues de argv[0] (y de la carpeta, si la hubo)
+    for (int i = arg0; i < argc; i++) {
         
         // El argumento actual es el flag (ej: "-p" o "--Paso")
         char *arg = argv[i];
