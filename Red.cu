@@ -11,8 +11,9 @@ float Parada = 0.1;
 int Iteraciones = 1000000;
 int CapasDesde = 2; //Desde 2
 int CapasHasta = 5; // Hasta 2
-int Repeticiones = 5;
+int Repeticiones = 1;
 int Intervalo = 10000;
+int Batch = 1;
 float MultiProfunda = 0.7;
 
 cudaDeviceProp Prop;
@@ -27,6 +28,7 @@ int sprintConfig(char* str){
     offset += sprintf(str+offset, "CapasHasta: %d\n", CapasHasta);
     offset += sprintf(str+offset, "Repeticiones: %d\n", Repeticiones);
     offset += sprintf(str+offset, "Intervalo: %d\n", Intervalo);
+    offset += sprintf(str+offset, "Batch: %d\n", Batch);
     offset += sprintf(str+offset, "MultiplicadorProfunda: %f\n", MultiProfunda);
     offset += sprintf(str+offset, "Tarjeta: %s\n", Prop.name);
     return offset;
@@ -85,6 +87,21 @@ __global__ void cuCopyRepeated(float *out, float *A, int n, int total) {
     }
 }
 
+//Igual que cuCopyRepeated pero para B redes. out son B bloques de (n x stride) en
+//column-major; se llenan las primeras 'cols' columnas de cada bloque con el sesgo
+//de esa red (A son B sesgos de largo n, contiguos).
+__global__ void cuCopyRepeatedBatched(float *out, float *A, int n, int cols, int stride, int B) {
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = n * cols * B;
+    if (tid < total){
+      int b = tid / (n * cols);
+      int rem = tid % (n * cols);
+      int col = rem / n;
+      int row = rem % n;
+      out[b * n * stride + col * n + row] = A[b * n + row];
+    }
+}
+
 float costo(float *y, float *yhat, int n){
     float sum = 0;
     for(int i=0; i<n; i++){
@@ -124,7 +141,59 @@ float score(float* y, float* yhat, int M, float* _returns ){
     return f1;
 }
 
-int main_test(int M, int m, int L, const int* dim) {
+//Un paso de backpropagation para las B redes a la vez (mismos datos, pesos distintos).
+//Es el mismo cuerpo del bucle de entrenamiento en version StridedBatched; se aisla en
+//una funcion para poder capturarlo como CUDA graph sin duplicar el bloque.
+void trainStepBatched(cublasHandle_t handle, cudaStream_t stream, int l, const int* dim,
+                      int M, int B, float** d_W, float** d_WV, float** d_B, float** d_BV,
+                      float** d_ev, float** d_d, float* d_yhat, float* d_1M,
+                      float Paso, float Gamma, float multi){
+    //SGEMM: C = aAB+bC
+    float alpha = 1.0f, beta = 1.0f;
+    for(int i=0; i<l; i++){
+        cuCopyRepeatedBatched<<<(M*dim[i+1]*B+255)/256, 256, 0, stream>>>(d_ev[i+1], d_B[i], dim[i+1], M, M, B);
+        cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N, dim[i+1], M, dim[i], &alpha,
+            d_W[i], dim[i+1], (long long)dim[i+1]*dim[i],
+            d_ev[i], dim[i], (long long)dim[i]*M,
+            &beta, d_ev[i+1], dim[i+1], (long long)dim[i+1]*M, B);
+        cuSigmoid<<<(M*dim[i+1]*B+255)/256, 256, 0, stream>>>(d_ev[1+i], dim[i+1] * M * B);
+    }
+
+    //Backpropagation formal.
+    alpha = 1.0f; beta = -1.0f;
+    cublasSgeam(handle, CUBLAS_OP_N, CUBLAS_OP_N, dim[l], M*B, &alpha, d_ev[l], dim[l], &beta,  d_yhat,  dim[l], d_d[l-1], dim[l]);
+
+    cuDSigmoidHadamard<<<(M*dim[l]*B+255)/256, 256, 0, stream>>>(d_d[l-1], d_ev[l], dim[l] * M * B);
+
+    //Ahora si en automatico
+    alpha=1.0f; beta = 0.0f;
+    for(int i=0; i<l-1; i++){
+        cublasSgemmStridedBatched(handle, CUBLAS_OP_T, CUBLAS_OP_N, dim[l-i-1], M, dim[l-i], &alpha,
+            d_W[l-i-1], dim[l-i], (long long)dim[l-i]*dim[l-i-1],
+            d_d[l-i-1], dim[l-i], (long long)dim[l-i]*M,
+            &beta, d_d[l-i-2], dim[l-i-1], (long long)dim[l-i-1]*M, B);
+        cuDSigmoidHadamard<<<(M*dim[l-i-1]*B+255)/256, 256, 0, stream>>>(d_d[l-i-2], d_ev[l-i-1], dim[l-i-1] * M * B);
+    }
+
+    //Terminamos con los gradiantes y actualizamos los pesos
+    float neg = -1.0;
+    alpha = (Paso*multi)/(M); beta = Gamma;
+    for(int i=0; i<l; i++){
+        cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_T, dim[i+1], dim[i], M, &alpha,
+            d_d[i], dim[i+1], (long long)dim[i+1]*M,
+            d_ev[i], dim[i], (long long)dim[i]*M,
+            &beta, d_WV[i], dim[i+1], (long long)dim[i+1]*dim[i], B);
+        cublasSaxpy(handle, dim[i+1]*dim[i]*B, &neg, d_WV[i], 1, d_W[i], 1);
+
+        cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_T, dim[i+1], 1, M, &alpha,
+            d_d[i], dim[i+1], (long long)dim[i+1]*M,
+            d_1M, 1, (long long)0,
+            &beta, d_BV[i], dim[i+1], (long long)dim[i+1]*1, B);
+        cublasSaxpy(handle, dim[i+1]*B, &neg, d_BV[i], 1, d_B[i], 1);
+    }
+}
+
+int main_test(int M, int m, int L, const int* dim, int B) {
     time_t semilla = time(NULL);
     srand(semilla * 1000000);
 
@@ -155,7 +224,7 @@ int main_test(int M, int m, int L, const int* dim) {
     int l = L-1;
 
     //Preparación de datos para el backpropagation
-    //Los PESOS
+    //Los PESOS (B réplicas contiguas por capa: red 0, red 1, ... red B-1)
     float **h_W = (float**)malloc(sizeof(float*) * l);
     float **h_WV = (float**)malloc(sizeof(float*) * l);
     float **h_B = (float**)malloc(sizeof(float*) * l);
@@ -164,45 +233,50 @@ int main_test(int M, int m, int L, const int* dim) {
     float **d_WV = (float**)malloc(sizeof(float*) * l);
     float **d_B = (float**)malloc(sizeof(float*) * l);
     float **d_BV = (float**)malloc(sizeof(float*) * l);
-    
+
     for(int i=0; i<l; i++){
       float limite = sqrt(6.0f/(dim[i]+dim[i+1]));
-      h_W[i] = (float*)malloc(sizeof(float) * dim[i] * dim[i+1]);
-      h_WV[i] = (float*)malloc(sizeof(float) * dim[i] * dim[i+1]);
-      h_B[i] = (float*)malloc(sizeof(float) * dim[i+1]);
-      h_BV[i] = (float*)malloc(sizeof(float) * dim[i+1]);
-      
+      int szW = dim[i] * dim[i+1];
+      int szB = dim[i+1];
+      h_W[i] = (float*)malloc(sizeof(float) * szW * B);
+      h_WV[i] = (float*)malloc(sizeof(float) * szW * B);
+      h_B[i] = (float*)malloc(sizeof(float) * szB * B);
+      h_BV[i] = (float*)malloc(sizeof(float) * szB * B);
+
       //Inicializar pesos con valores aleatorios [-limite,limite]
-      for (int j = 0; j < dim[i] * dim[i+1]; j++) {
-	h_W[i][j] = ( (float) (static_cast<float>(rand())/RAND_MAX)*2.0-1.0 )*limite;
-	h_WV[i][j] = 0.0;
+      for (int b = 0; b < B; b++) {
+      for (int j = 0; j < szW; j++) {
+	h_W[i][b*szW+j] = ( (float) (static_cast<float>(rand())/RAND_MAX)*2.0-1.0 )*limite;
+	h_WV[i][b*szW+j] = 0.0;
       }
-      
-      for (int j = 0; j < dim[i+1]; j++) {
-	h_B[i][j] = 0.0;
-	h_BV[i][j] = 0.0;
+
+      for (int j = 0; j < szB; j++) {
+	h_B[i][b*szB+j] = 0.0;
+	h_BV[i][b*szB+j] = 0.0;
+      }
       }
 
       //En la cpu
-      cudaMalloc(&d_W[i], dim[i] * dim[i+1] * sizeof(float));
-      cudaMemcpy(d_W[i], h_W[i], dim[i] * dim[i+1] * sizeof(float), cudaMemcpyHostToDevice);
-      
-      cudaMalloc(&d_WV[i], dim[i] * dim[i+1] * sizeof(float));
-      cudaMemcpy(d_WV[i], h_W[i], dim[i] * dim[i+1] * sizeof(float), cudaMemcpyHostToDevice);
-      
-      cudaMalloc(&d_B[i], dim[i+1] * sizeof(float));
-      cudaMemcpy(d_B[i], h_B[i], dim[i+1] * sizeof(float), cudaMemcpyHostToDevice);
-      
-      cudaMalloc(&d_BV[i], dim[i+1] * sizeof(float));
-      cudaMemcpy(d_BV[i], h_B[i], dim[i+1] * sizeof(float), cudaMemcpyHostToDevice);
+      cudaMalloc(&d_W[i], szW * B * sizeof(float));
+      cudaMemcpy(d_W[i], h_W[i], szW * B * sizeof(float), cudaMemcpyHostToDevice);
+
+      cudaMalloc(&d_WV[i], szW * B * sizeof(float));
+      cudaMemcpy(d_WV[i], h_W[i], szW * B * sizeof(float), cudaMemcpyHostToDevice);
+
+      cudaMalloc(&d_B[i], szB * B * sizeof(float));
+      cudaMemcpy(d_B[i], h_B[i], szB * B * sizeof(float), cudaMemcpyHostToDevice);
+
+      cudaMalloc(&d_BV[i], szB * B * sizeof(float));
+      cudaMemcpy(d_BV[i], h_B[i], szB * B * sizeof(float), cudaMemcpyHostToDevice);
     }
 
     //Variables temporales para el backpropagation
     float *d_yhat;
-    cudaMalloc(&d_yhat,       dim[l] * M * sizeof(float));
-    cudaMemcpy(d_yhat , yhat, dim[l] * M * sizeof(float), cudaMemcpyHostToDevice);
-    
-    float *y = (float*)malloc(sizeof(float) * M);
+    cudaMalloc(&d_yhat,       dim[l] * M * B * sizeof(float));
+    for(int b=0; b<B; b++)
+        cudaMemcpy(d_yhat + b*dim[l]*M , yhat, dim[l] * M * sizeof(float), cudaMemcpyHostToDevice);
+
+    float *y = (float*)malloc(sizeof(float) * dim[l] * M * B);
     float **d_ev, **d_d;
     d_ev = (float**)malloc(sizeof(float*) * L);
     d_d  = (float**)malloc(sizeof(float*) * (L-1));
@@ -210,14 +284,15 @@ int main_test(int M, int m, int L, const int* dim) {
     float **h_ev = (float**)malloc(sizeof(float*) * L);
 
     for(int i=0; i<L; i++){
-        cudaMalloc(&d_ev[i],  dim[i] * M * sizeof(float));
-        h_ev[i] = (float*)malloc( dim[i] * M * sizeof(float));
+        cudaMalloc(&d_ev[i],  dim[i] * M * B * sizeof(float));
+        h_ev[i] = (float*)malloc( dim[i] * M * B * sizeof(float));
     }
 
-    cudaMemcpy(d_ev[0], X,    dim[0] * M * sizeof(float), cudaMemcpyHostToDevice);
+    for(int b=0; b<B; b++)
+        cudaMemcpy(d_ev[0] + b*dim[0]*M, X,    dim[0] * M * sizeof(float), cudaMemcpyHostToDevice);
 
     for(int i=0; i<L-1; i++){
-        cudaMalloc(&d_d[i],  dim[i+1] * M * sizeof(float));
+        cudaMalloc(&d_d[i],  dim[i+1] * M * B * sizeof(float));
     }
 
     //Esta matriz Identidad es últil
@@ -242,126 +317,143 @@ int main_test(int M, int m, int L, const int* dim) {
     cublasHandle_t handle;
     cublasCreate(&handle);
 
-    char* costos = (char*)malloc(sizeof(char) * (Iteraciones/Intervalo)*10);
-    int offset_cost = 0;
+    //Stream propio + workspace fijo de cuBLAS: necesario para capturar el paso de
+    //entrenamiento como CUDA graph (durante la captura no se puede reservar memoria).
+    cudaStream_t stream;
+    cudaStreamCreate(&stream);
+    cublasSetStream(handle, stream);
+    void *d_ws;
+    size_t ws_size = 32 * 1024 * 1024;
+    cudaMalloc(&d_ws, ws_size);
+    cublasSetWorkspace(handle, d_ws, ws_size);
+
+    //Un registro de costos por replica
+    char** costos = (char**)malloc(sizeof(char*) * B);
+    int* offset_cost = (int*)malloc(sizeof(int) * B);
+    for(int b=0; b<B; b++){
+        costos[b] = (char*)malloc(sizeof(char) * (Iteraciones/Intervalo + 2) * 16);
+        offset_cost[b] = 0;
+    }
 
     float multi = powf(MultiProfunda, L-3);
 
-    int n;
-    for(n = 0; n < Iteraciones; n++){
-        //Preparamos con la evaluación completa de red
+    //Se hace un paso "en vivo" (n=0) para forzar toda inicializacion diferida, luego se
+    //captura un paso identico (n=1) como CUDA graph y el resto del bucle solo reproduce
+    //ese graph, que es lo que elimina el overhead de lanzamiento por iteracion.
+    cudaGraph_t graph;
+    cudaGraphExec_t graexec;
 
-        //SGEMM: C = aAB+bC
-        float alpha = 1.0f, beta = 1.0f;
-        for(int i=0; i<l; i++){
-	    cuCopyRepeated<<<(M*dim[i+1]+255)/256, 256>>>(d_ev[i+1], d_B[i], dim[i+1], dim[i+1] * M);
-            cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, dim[i+1], M, dim[i], &alpha, d_W[i], dim[i+1], d_ev[i], dim[i], &beta, d_ev[i+1], dim[i+1]);
-            cuSigmoid<<<(M*dim[i+1]+255)/256, 256>>>(d_ev[1+i], dim[i+1] * M);
-        }
+    trainStepBatched(handle, stream, l, dim, M, B, d_W, d_WV, d_B, d_BV, d_ev, d_d, d_yhat, d_1M, Paso, Gamma, multi);
+    cudaStreamSynchronize(stream);
+
+    cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal);
+    trainStepBatched(handle, stream, l, dim, M, B, d_W, d_WV, d_B, d_BV, d_ev, d_d, d_yhat, d_1M, Paso, Gamma, multi);
+    cudaStreamEndCapture(stream, &graph);
+    cudaGraphInstantiate(&graexec, graph, NULL, NULL, 0);
+
+    int n;
+    for(n = 2; n < Iteraciones; n++){
+        cudaGraphLaunch(graexec, stream);
 
         //IMPRIMIR
         if (n % Intervalo == 0 && n>0) {
+            cudaStreamSynchronize(stream);
             printf("Iteración %d\n", n);
-            cudaMemcpy(y, d_ev[l], dim[l]*M*sizeof(float), cudaMemcpyDeviceToHost);
-	    
-	    float cuesta = costo(y, yhat, M)/M;
-	    offset_cost += sprintf(costos+offset_cost, "%f", cuesta);
-            printf("Costo: %f\n", cuesta);
-	    if (cuesta < Parada)
-	      break;
-        }
-        
-        //Backpropagation formal.
-        
-	alpha = 1.0f; beta = -1.0f;
-	cublasSgeam(handle, CUBLAS_OP_N, CUBLAS_OP_N, dim[l], M, &alpha, d_ev[l], dim[l], &beta,  d_yhat,  dim[l], d_d[l-1], dim[l]);
-	
-        cuDSigmoidHadamard<<<(M*dim[l]+255)/256, 256>>>(d_d[l-1], d_ev[l], dim[l] * M);
-	
-        //Ahora sí en automático
-        alpha=1.0f; beta = 0.0f;
-        for(int i=0; i<l-1; i++){
-            cublasSgemm(handle, CUBLAS_OP_T, CUBLAS_OP_N, dim[l-i-1], M, dim[l-i]  , &alpha, d_W[l-i-1], dim[l-i]  , d_d[l-i-1], dim[l-i], &beta, d_d[l-i-2], dim[l-i-1]);
-            cuDSigmoidHadamard<<<(M*dim[l-i-1]+255)/256, 256>>>(d_d[l-i-2], d_ev[l-i-1], dim[l-i-1] * M);
-        }
+            cudaMemcpy(y, d_ev[l], dim[l]*M*B*sizeof(float), cudaMemcpyDeviceToHost);
 
-	        //Terminamos con los gradiantes y actualizamos los pesos
-	float neg = -1.0;
-        alpha = (Paso*multi)/(M); beta = Gamma;
-        for(int i=0; i<l; i++){
-            cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_T, dim[i+1], dim[i], M, &alpha, d_d[i], dim[i+1], d_ev[i], dim[i], &beta, d_WV[i], dim[i+1]);
-	    cublasSaxpy(handle, dim[i+1]*dim[i], &neg, d_WV[i], 1, d_W[i], 1);
-	    
-            cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_T, dim[i+1], 1, M, &alpha, d_d[i], dim[i+1], d_1M, 1, &beta, d_BV[i], dim[i+1]);
-	    cublasSaxpy(handle, dim[i+1], &neg, d_BV[i], 1, d_B[i], 1);
-	}
+            for(int b=0; b<B; b++){
+                float cuesta = costo(y + b*dim[l]*M, yhat, M)/M;
+                offset_cost[b] += sprintf(costos[b]+offset_cost[b], "%f", cuesta);
+            }
+            printf("Costo: %f\n", costo(y, yhat, M)/M);
+        }
     }
+    cudaStreamSynchronize(stream);
 
     //Muestra el Train
     // Copiar el resultado de la última capa a la CPU
     float scores[3];
-    cudaMemcpy(y, d_ev[l], dim[l]*M*sizeof(float), cudaMemcpyDeviceToHost);
-    
-    
+    cudaMemcpy(y, d_ev[l], dim[l]*M*B*sizeof(float), cudaMemcpyDeviceToHost);
+
     int offset_arq = 1;
     char arquitectura[128] = "_";
     for(int i=0; i<L; i++){
       offset_arq += sprintf(arquitectura+offset_arq, "%d_", dim[i]);
     }
 
-    int offset = 0;
-    
-    char buffer[1024];
-    offset += sprintf(buffer+offset, "\nArquitectura: %s\n", arquitectura);
-    offset += sprintf(buffer+offset, "Semilla: %ld\n", (long)(semilla));
-    offset += sprintf(buffer+offset, "Segundos: %ld\n", (long)(time(NULL)-semilla));
-    offset += sprintf(buffer+offset, "NIteraciones: %d\n", n);
-    
-    offset += sprintf(buffer+offset, "\nCosto_train: %f\n", costo(y, yhat, M)/M);
-    offset += score(y, yhat, M, scores);
-    offset += sprintf(buffer+offset, "Precision_train: %f\n", scores[1]);
-    offset += sprintf(buffer+offset, "Recall_train: %f\n", scores[2]);
-    offset += sprintf(buffer+offset, "F1_train: %f\n", scores[0]);
-    
-    
     //EVALUAMOS EL TEST (ASUMIMOS m<=M)
     sprintf(fpath, "Bin/Test/X/%dx%d.bin", N, m);
     fp = fopen(fpath, "rb");
     fread(X, sizeof(float), N * m, fp);
     fclose(fp);
 
-    cudaMemcpy(d_ev[0], X, dim[0] * m * sizeof(float), cudaMemcpyHostToDevice);
+    for(int b=0; b<B; b++)
+        cudaMemcpy(d_ev[0] + b*dim[0]*M, X, dim[0] * m * sizeof(float), cudaMemcpyHostToDevice);
 
+    float* yhat_test = (float*)malloc(sizeof(float) * K * m);
     sprintf(fpath, "Bin/Test/Y/%dx%d.bin", K, m);
     fp = fopen(fpath, "rb");
-    fread(yhat, sizeof(float), K * m, fp);
+    fread(yhat_test, sizeof(float), K * m, fp);
     fclose(fp);
-    
-    //Evaluando...
+
+    //Evaluando... (mismo forward batcheado, pero solo m columnas por red)
     float alpha = 1.0f, beta = 1.0f;
     for(int i=0; i<l; i++){
-       cuCopyRepeated<<<(m*dim[i+1]+255)/256, 256>>>(d_ev[i+1], d_B[i], dim[i+1], dim[i+1] * m);
-       cublasSgemm(handle, CUBLAS_OP_N, CUBLAS_OP_N, dim[i+1], m, dim[i], &alpha, d_W[i], dim[i+1], d_ev[i], dim[i], &beta, d_ev[i+1], dim[i+1]);
-       cuSigmoid<<<(m*dim[i+1]+255)/256, 256>>>(d_ev[1+i], dim[i+1] * m);
+       cuCopyRepeatedBatched<<<(M*dim[i+1]*B+255)/256, 256, 0, stream>>>(d_ev[i+1], d_B[i], dim[i+1], m, M, B);
+       cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N, dim[i+1], m, dim[i], &alpha,
+           d_W[i], dim[i+1], (long long)dim[i+1]*dim[i],
+           d_ev[i], dim[i], (long long)dim[i]*M,
+           &beta, d_ev[i+1], dim[i+1], (long long)dim[i+1]*M, B);
+       cuSigmoid<<<(M*dim[i+1]*B+255)/256, 256, 0, stream>>>(d_ev[1+i], dim[i+1] * M * B);
+    }
+    cudaStreamSynchronize(stream);
+
+    float* y_test = (float*)malloc(sizeof(float) * dim[l] * M * B);
+    cudaMemcpy(y_test, d_ev[l], dim[l]*M*B*sizeof(float), cudaMemcpyDeviceToHost);
+
+    //Un archivo Reg por replica: _<arq>_<semilla>_<b>.txt
+    for(int b=0; b<B; b++){
+        int offset = 0;
+
+        char buffer[1024];
+        offset += sprintf(buffer+offset, "\nArquitectura: %s\n", arquitectura);
+        offset += sprintf(buffer+offset, "Semilla: %ld\n", (long)(semilla));
+        offset += sprintf(buffer+offset, "Segundos: %ld\n", (long)(time(NULL)-semilla));
+        offset += sprintf(buffer+offset, "NIteraciones: %d\n", n);
+
+        offset += sprintf(buffer+offset, "\nCosto_train: %f\n", costo(y + b*dim[l]*M, yhat, M)/M);
+        score(y + b*dim[l]*M, yhat, M, scores);
+        offset += sprintf(buffer+offset, "Precision_train: %f\n", scores[1]);
+        offset += sprintf(buffer+offset, "Recall_train: %f\n", scores[2]);
+        offset += sprintf(buffer+offset, "F1_train: %f\n", scores[0]);
+
+
+        offset += sprintf(buffer+offset, "\nCosto_test: %f\n", costo(y_test + b*dim[l]*M, yhat_test, m)/m);
+        score(y_test + b*dim[l]*M, yhat_test, m, scores);
+        offset += sprintf(buffer+offset, "Precision_test: %f\n", scores[1]);
+        offset += sprintf(buffer+offset, "Recall_test: %f\n", scores[2]);
+        offset += sprintf(buffer+offset, "F1_test: %f\n \n", scores[0]);
+        printf(buffer);
+
+        char nombre_archivo[128];
+        sprintf(nombre_archivo, "Reg/%s%ld_%d.txt", arquitectura, (long)semilla, b);
+        fp = fopen(nombre_archivo, "w");
+        sprintConfig(buffer+offset*sizeof(char));
+        fprintf(fp, buffer);
+        fprintf(fp, "\nCostos:\n");
+        fprintf(fp, costos[b]);
+        fclose(fp);
     }
 
-    //Muestra el Test
-    cudaMemcpy(y, d_ev[l], dim[l]*m*sizeof(float), cudaMemcpyDeviceToHost);
-    offset += sprintf(buffer+offset, "\nCosto_test: %f\n", costo(y, yhat, m)/m);
-    score(y, yhat, m, scores);
-    offset += sprintf(buffer+offset, "Precision_test: %f\n", scores[1]);
-    offset += sprintf(buffer+offset, "Recall_test: %f\n", scores[2]);
-    offset += sprintf(buffer+offset, "F1_test: %f\n \n", scores[0]);
-    printf(buffer);
-
-    char nombre_archivo[128];
-    sprintf(nombre_archivo, "Reg/%s%ld.txt", arquitectura, (long)semilla);
-    fp = fopen(nombre_archivo, "w");
-    sprintConfig(buffer+offset*sizeof(char));
-    fprintf(fp, buffer);
-    fprintf(fp, "\nCostos:\n");
-    fprintf(fp, costos);
-    fclose(fp);
+    cudaGraphExecDestroy(graexec);
+    cudaGraphDestroy(graph);
+    cudaStreamDestroy(stream);
+    cudaFree(d_ws);
+    free(yhat_test);
+    free(y_test);
+    for(int b=0; b<B; b++) free(costos[b]);
+    free(costos);
+    free(offset_cost);
       
     cublasDestroy(handle);  // Destroy cuBLAS handle (optional)
 
@@ -428,6 +520,7 @@ void mostrar_ayuda(const char *nombre_programa) {
     printf("  -ch| --CapasHasta   Capas Finales Finales (int). Actual: %d\n", CapasHasta);
     printf("  -R | --Repeticiones Número de Repeticiones Experimento (int). Actual: %d\n", Repeticiones);
     printf("  -I | --Intervalo    Intervalo de registro (int). Actual: %d\n", Intervalo);
+    printf("  -b | --Batch        Redes entrenadas en paralelo por repeticion (int). Actual: %d\n", Batch);
     printf("  -h | --ayuda        Mostrar esta ayuda.\n");
 }
 
@@ -519,6 +612,15 @@ int main(int argc, char *argv[]) {
                 return 1;
             }
         }
+        // ------------------ 8. Batch (int) ------------------
+        else if (strcmp(arg, "-b") == 0 || strcmp(arg, "--Batch") == 0) {
+            if (i + 1 < argc) {
+                Batch = atoi(argv[++i]);
+            } else {
+                fprintf(stderr, "Error: El flag %s requiere un valor.\n", arg);
+                return 1;
+            }
+        }
         // ------------------ 8. Ayuda ------------------
         else if (strcmp(arg, "-h") == 0 || strcmp(arg, "--ayuda") == 0) {
             mostrar_ayuda(argv[0]);
@@ -569,10 +671,10 @@ int main(int argc, char *argv[]) {
       for(int j = 0; j<Repeticiones; j++){
 	//Ahora sí, la prueba.
 	printf("\n\n--- Test Angosta %d.%d ---\n", i, j);
-	main_test(M, m, 3, dim1);
+	main_test(M, m, 3, dim1, Batch);
 
 	printf("\n\n--- Test Profunda %d.%d ---\n", i, j);
-	main_test(M, m, i+2, dim2);
+	main_test(M, m, i+2, dim2, Batch);
       }
     }
     
