@@ -1,0 +1,70 @@
+=== SWEEP START 2026-08-30 03:03:33  (-b 100 -i 100000)  34 carpetas ===
+[1/34] START 2026-08-30 03:03:33  Problem0_Titanic
+[1/34] DONE  rc=0  495s  +800 archivos  (Problem0_Titanic)
+[2/34] START 2026-08-30 03:11:48  Problem1_Blobs
+[2/34] DONE  rc=0  862s  +800 archivos  (Problem1_Blobs)
+[3/34] START 2026-08-30 03:26:10  Problem2_Cancer
+[3/34] DONE  rc=0  500s  +800 archivos  (Problem2_Cancer)
+[4/34] START 2026-08-30 03:34:30  Problem3_XOR
+[4/34] DONE  rc=0  863s  +800 archivos  (Problem3_XOR)
+[5/34] START 2026-08-30 03:48:53  Problem4_Circles
+[5/34] DONE  rc=0  861s  +800 archivos  (Problem4_Circles)
+[6/34] START 2026-08-30 04:03:14  Problem5_Moons
+[6/34] DONE  rc=0  863s  +800 archivos  (Problem5_Moons)
+[7/34] START 2026-08-30 04:17:37  Problem6_Spiral
+[7/34] DONE  rc=0  864s  +800 archivos  (Problem6_Spiral)
+[8/34] START 2026-08-30 04:32:01  Problem7_Sonar
+[8/34] DONE  rc=0  342s  +800 archivos  (Problem7_Sonar)
+[9/34] START 2026-08-30 04:37:43  Nuevos DeepSeek/Problem1_Blobs
+[9/34] DONE  rc=0  862s  +800 archivos  (Nuevos DeepSeek/Problem1_Blobs)
+[10/34] START 2026-08-30 04:52:05  Nuevos DeepSeek/Problem2_NestedCircles
+[10/34] DONE  rc=0  862s  +800 archivos  (Nuevos DeepSeek/Problem2_NestedCircles)
+[11/34] START 2026-08-30 05:06:27  Nuevos DeepSeek/Problem3_SineClusters
+[11/34] DONE  rc=0  864s  +800 archivos  (Nuevos DeepSeek/Problem3_SineClusters)
+[12/34] START 2026-08-30 05:20:51  Nuevos DeepSeek/Problem4_AdaptiveMesh
+[12/34] DONE  rc=0  863s  +800 archivos  (Nuevos DeepSeek/Problem4_AdaptiveMesh)
+[13/34] START 2026-08-30 05:35:14  Nuevos DeepSeek/Problem5_Checkerboard
+[13/34] DONE  rc=0  862s  +800 archivos  (Nuevos DeepSeek/Problem5_Checkerboard)
+[14/34] START 2026-08-30 05:49:36  Nuevos DeepSeek/Problem6_SwissRoll2D
+[14/34] DONE  rc=0  863s  +800 archivos  (Nuevos DeepSeek/Problem6_SwissRoll2D)
+[15/34] START 2026-08-30 06:03:59  Nuevos DeepSeek/Problem7_ConcentricPolygons
+[15/34] DONE  rc=0  864s  +800 archivos  (Nuevos DeepSeek/Problem7_ConcentricPolygons)
+[16/34] START 2026-08-30 06:18:23  Nuevos Gemini/Problem1_Blobs
+[16/34] DONE  rc=0  864s  +800 archivos  (Nuevos Gemini/Problem1_Blobs)
+[17/34] START 2026-08-30 06:32:47  Nuevos Gemini/Problem2_Cancer
+[17/34] DONE  rc=0  502s  +800 archivos  (Nuevos Gemini/Problem2_Cancer)
+[18/34] START 2026-08-30 06:41:09  Nuevos Gemini/Problem3_XOR
+[18/34] DONE  rc=0  862s  +800 archivos  (Nuevos Gemini/Problem3_XOR)
+[19/34] START 2026-08-30 06:55:31  Nuevos Gemini/Problem4_Circles
+[19/34] DONE  rc=0  861s  +800 archivos  (Nuevos Gemini/Problem4_Circles)
+[20/34] START 2026-08-30 07:09:52  Nuevos Gemini/Problem5_Moons
+[20/34] DONE  rc=0  862s  +800 archivos  (Nuevos Gemini/Problem5_Moons)
+[21/34] START 2026-08-30 07:24:14  Nuevos Gemini/Problem6_Spiral
+[21/34] DONE  rc=0  861s  +800 archivos  (Nuevos Gemini/Problem6_Spiral)
+[22/34] START 2026-08-30 07:38:35  Nuevos Gemini/Problem7_Sonar
+[22/34] DONE  rc=0  341s  +800 archivos  (Nuevos Gemini/Problem7_Sonar)
+[23/34] START 2026-08-30 07:44:16  Nuevos Gemini/Problem8_Checkerboard
+[23/34] DONE  rc=0  864s  +800 archivos  (Nuevos Gemini/Problem8_Checkerboard)
+[24/34] START 2026-08-30 07:58:40  Nuevos Gemini/Problem9_Quantiles
+[24/34] DONE  rc=0  863s  +800 archivos  (Nuevos Gemini/Problem9_Quantiles)
+[25/34] START 2026-08-30 08:13:03  Nuevos Grok/Problem1_Blobs
+[25/34] DONE  rc=0  864s  +800 archivos  (Nuevos Grok/Problem1_Blobs)
+[26/34] START 2026-08-30 08:27:27  Nuevos Grok/Problem2_Cancer
+[26/34] DONE  rc=0  501s  +800 archivos  (Nuevos Grok/Problem2_Cancer)
+[27/34] START 2026-08-30 08:35:48  Nuevos Grok/Problem3_XOR
+[27/34] DONE  rc=0  863s  +800 archivos  (Nuevos Grok/Problem3_XOR)
+[28/34] START 2026-08-30 08:50:11  Nuevos Grok/Problem4_Circles
+[28/34] DONE  rc=0  863s  +800 archivos  (Nuevos Grok/Problem4_Circles)
+[29/34] START 2026-08-30 09:04:34  Nuevos Grok/Problem5_Moons
+[29/34] DONE  rc=0  863s  +800 archivos  (Nuevos Grok/Problem5_Moons)
+[30/34] START 2026-08-30 09:18:57  Nuevos Grok/Problem6_Spiral
+[30/34] DONE  rc=0  864s  +800 archivos  (Nuevos Grok/Problem6_Spiral)
+[31/34] START 2026-08-30 09:33:21  Nuevos Grok/Problem7_Sonar
+[31/34] DONE  rc=0  342s  +800 archivos  (Nuevos Grok/Problem7_Sonar)
+[32/34] START 2026-08-30 09:39:03  Nuevos Grok/Problem8_Spiral3Turns
+[32/34] DONE  rc=0  862s  +800 archivos  (Nuevos Grok/Problem8_Spiral3Turns)
+[33/34] START 2026-08-30 09:53:25  Nuevos Grok/Problem9_Spiral4Turns
+[33/34] DONE  rc=0  864s  +800 archivos  (Nuevos Grok/Problem9_Spiral4Turns)
+[34/34] START 2026-08-30 10:07:49  Nuevos Grok/Problem10_SpiralHighNoise
+[34/34] DONE  rc=0  861s  +800 archivos  (Nuevos Grok/Problem10_SpiralHighNoise)
+=== SWEEP END 2026-08-30 10:22:10 ===

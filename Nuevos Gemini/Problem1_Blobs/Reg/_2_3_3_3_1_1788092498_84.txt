@@ -1,0 +1,30 @@
+
+Arquitectura: _2_3_3_3_1_
+Semilla: 1788092498
+Segundos: 140
+NIteraciones: 100000
+
+Costo_train: 0.249705
+Precision_train: 0.506144
+Recall_train: 0.807598
+F1_train: 0.622285
+
+Costo_test: 0.251873
+Precision_test: 0.462236
+Recall_test: 0.831522
+F1_test: 0.594175
+ 
+Paso: 0.200000
+Gamma: 0.000000
+Parada: 0.100000
+Iteraciones: 100000
+CapasDesde: 2
+CapasHasta: 5
+Repeticiones: 1
+Intervalo: 10000
+Batch: 100
+MultiplicadorProfunda: 0.700000
+Tarjeta: NVIDIA GeForce RTX 3090 Ti
+
+Costos:
+0.2498710.2498600.2498500.2498380.2498250.2498080.2497870.2497620.249734

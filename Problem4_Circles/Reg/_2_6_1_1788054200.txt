@@ -1,0 +1,10 @@
+
+Arquitectura: _2_6_1_
+Semilla: 1788054200
+Segundos: 11
+NIteraciones: 20000
+
+Costo_train: 0.021554
+
+Costos:
+0.2066880.021554

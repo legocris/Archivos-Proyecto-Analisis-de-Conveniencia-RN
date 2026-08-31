@@ -4,6 +4,14 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 # ==========================================
+# CONFIGURACIÓN
+# ==========================================
+
+# Límite de iteraciones: se descartan los registros que lo superen
+# y además fija el tope del eje Y en la gráfica de eficiencia.
+MAX_ITERACIONES = 100_000
+
+# ==========================================
 # 1. PARSER DE LOGS
 # ==========================================
 
@@ -31,7 +39,12 @@ def parse_log_file(filepath):
                         else:
                             data[key] = int(value)
                     except ValueError:
-                        data[key] = value
+                        # Entrenamientos que divergieron escriben nan/-nan(ind)/inf.
+                        # Los guardamos como NaN para que pandas los ignore en las medias.
+                        if value.lower().lstrip("-+").startswith(("nan", "inf")):
+                            data[key] = float("nan")
+                        else:
+                            data[key] = value
     except Exception as e:
         print(f"Error leyendo {filepath}: {e}")
         return None
@@ -119,26 +132,36 @@ def save_excel_and_stats(df_subset, n_neurons, output_folder):
 # ==========================================
 
 def add_stat_annotation(ax, df_subset, column):
-    """ Agrega texto con Promedio y Std sobre cada caja """
+    """ Agrega texto con Promedio y Std en las esquinas inferiores.
+        Primera arquitectura -> esquina inferior izquierda.
+        Última arquitectura  -> esquina inferior derecha. """
     # Calcular stats por arquitectura para poner texto
     stats = df_subset.groupby('Arquitectura')[column].agg(['mean', 'std']).reset_index()
-    
+
     # Obtener el orden de las cajas en el eje X
     x_labels = [item.get_text() for item in ax.get_xticklabels()]
-    
-    # Altura para el texto (un poco arriba del limite superior visible o fijo)
-    y_min, y_max = ax.get_ylim()
-    y_pos = y_max - (y_max - y_min) * 0.05 # 5% abajo del tope
-    
+
     for i, label in enumerate(x_labels):
         row = stats[stats['Arquitectura'] == label]
-        if not row.empty:
-            mu = row['mean'].values[0]
-            sigma = row['std'].values[0]
-            txt = f"μ={mu:.2f}\nσ={sigma:.2f}"
-            ax.text(i, y_pos, txt, horizontalalignment='center', 
-                    size='small', color='black', weight='bold',
-                    bbox=dict(facecolor='white', alpha=0.5, edgecolor='none'))
+        if row.empty:
+            continue
+        mu = row['mean'].values[0]
+        sigma = row['std'].values[0]
+        txt = f"μ={mu:.2f}\nσ={sigma:.2f}"
+
+        # Esquina: la primera caja abajo-izquierda, la última abajo-derecha;
+        # cualquier caja intermedia queda centrada sobre su posición.
+        if i == 0:
+            x_pos, ha = 0.02, 'left'
+        elif i == len(x_labels) - 1:
+            x_pos, ha = 0.98, 'right'
+        else:
+            x_pos, ha = (i + 0.5) / len(x_labels), 'center'
+
+        ax.text(x_pos, 0.02, txt, transform=ax.transAxes,
+                horizontalalignment=ha, verticalalignment='bottom',
+                size='small', color='black', weight='bold',
+                bbox=dict(facecolor='white', alpha=0.5, edgecolor='none'))
 
 def plot_comparison(df_subset, n_neurons, output_folder):
     # 1. ORDENAMIENTO: Angostas (False) primero, luego Profundas (True)
@@ -155,30 +178,39 @@ def plot_comparison(df_subset, n_neurons, output_folder):
     palette_box = {"Angosta": "#3498db", "Profunda": "#e74c3c"}
 
     # --- GRÁFICA 1: CALIDAD (F1 TEST) ---
-    sns.boxplot(x="Arquitectura", y="F1_test", data=df_subset, ax=axes[0],
-                hue="tipo", palette=palette_box, order=order_arch, dodge=False)
-    sns.boxplot(x="Arquitectura", y="F1_train", data=df_subset, ax=axes[0],
-                hue="tipo", palette=palette_box, order=order_arch, dodge=False, boxprops=dict(alpha=0.3))
-    
-    # Puntos individuales: Amarillo si convergió, Negro si no
-    sns.stripplot(x="Arquitectura", y="F1_test", data=df_subset, ax=axes[0],
-                  hue="Convergio", palette={"Si": "yellow", "No": "#333333"},
-                  order=order_arch, size=8, jitter=True, edgecolor="black", linewidth=1, marker="o")
-    
+    # Si ninguna corrida del grupo produjo F1 válido (p.ej. todas divergieron)
+    # no hay nada que graficar: evitamos que seaborn reviente.
+    hay_f1 = df_subset['F1_test'].notna().any()
+    if hay_f1:
+        sns.boxplot(x="Arquitectura", y="F1_test", data=df_subset, ax=axes[0],
+                    hue="tipo", palette=palette_box, order=order_arch, dodge=False, showfliers=False)
+        sns.boxplot(x="Arquitectura", y="F1_train", data=df_subset, ax=axes[0],
+                    hue="tipo", palette=palette_box, order=order_arch, dodge=False, showfliers=False, boxprops=dict(alpha=0.3))
+
+        # Puntos individuales: Amarillo si convergió, Negro si no
+        sns.stripplot(x="Arquitectura", y="F1_test", data=df_subset, ax=axes[0],
+                      hue="Convergio", palette={"Si": "yellow", "No": "#333333"},
+                      order=order_arch, size=3, jitter=True, edgecolor="black", linewidth=0.4, marker="o")
+        add_stat_annotation(axes[0], df_subset, 'F1_test')
+    else:
+        axes[0].text(0.5, 0.5, "Sin datos válidos de F1\n(todas las corridas divergieron)",
+                     transform=axes[0].transAxes, ha='center', va='center', size='large', color='gray')
+
     axes[0].set_title('Calidad: F1 Score en Test')
     axes[0].set_ylabel('F1 Score')
-    add_stat_annotation(axes[0], df_subset, 'F1_test')
     
     # --- GRÁFICA 2: EFICIENCIA (ITERACIONES) ---
     sns.boxplot(x="Arquitectura", y="NIteraciones", data=df_subset, ax=axes[1],
-                hue="tipo", palette=palette_box, order=order_arch, dodge=False)
+                hue="tipo", palette=palette_box, order=order_arch, dodge=False, showfliers=False)
     
     sns.stripplot(x="Arquitectura", y="NIteraciones", data=df_subset, ax=axes[1],
                   hue="Convergio", palette={"Si": "yellow", "No": "#333333"},
-                  order=order_arch, size=8, jitter=True, edgecolor="black", linewidth=1, marker="o")
+                  order=order_arch, size=3, jitter=True, edgecolor="black", linewidth=0.4, marker="o")
 
     axes[1].set_title('Eficiencia: Cantidad de Iteraciones')
     axes[1].set_ylabel('Iteraciones (Menos es mejor)')
+    # 5% de aire extra para que los puntos que tocan el límite quepan completos
+    axes[1].set_ylim(0, MAX_ITERACIONES * 1.05)
     add_stat_annotation(axes[1], df_subset, 'NIteraciones')
 
     # Ajustar leyendas
@@ -219,7 +251,15 @@ if __name__ == "__main__":
 
         # 1. Procesar Datos
         df = process_logs_folder(PATH_REG)
-        
+
+        # 1b. Descartar corridas que superaron el límite de iteraciones
+        if not df.empty:
+            n_antes = len(df)
+            df = df[df['NIteraciones'] <= MAX_ITERACIONES].copy()
+            descartados = n_antes - len(df)
+            if descartados > 0:
+                print(f"Descartados {descartados} registros con más de {MAX_ITERACIONES} iteraciones.")
+
         if not df.empty:
             # 2. Agrupar por cantidad de neuronas totales
             unique_neurons = df['total_neurons'].unique()
