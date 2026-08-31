@@ -1,0 +1,20 @@
+4 Circles.
+
+el sima de la profunda me da curiosidad. Se ve como comienza a empeorar la profunda.
+
+5 Moons comienza mejor en profunda. Pero a mas capas empeora.
+
+6 Espiral igual, empeora con el numero de capas
+
+8 checkerboard es oficialmente el único que jala mejor en profundas.
+
+Las espirales de 2, 3 y 4 turnos muestran comportamientos interesantes en ambas.
+
+Las conclusiones son que la red profunda casi nunca gana y por el contrario a más capas más dificil es
+que resuelva. Mientras que para las angostas, a más neuronas no empeoran.
+
+Mi teoría es que el lugar de inicialización define todo para el descenso por gradiente. En un espacio
+de una sola capa  hay más homoheneidad. Mientras que en multiples capas la homogeneidad se pierde, hay
+más mínimos, tienes que iniciar en el lugar correcto. o tal vez... Bueno hay que pensale bien, pero creo
+que hay que investigar a mayor profundidad cada problema y separarlos en los que tienen diferencias 
+y los que no.
