@@ -4,6 +4,7 @@
 #include <cublas_v2.h>
 #include <stdio.h>
 #include <time.h>
+#include <direct.h>
 
 float Paso = 0.2;
 float Gamma = 0.0;
@@ -141,58 +142,6 @@ float score(float* y, float* yhat, int M, float* _returns ){
     return f1;
 }
 
-//Un paso de backpropagation para las B redes a la vez (mismos datos, pesos distintos).
-//Es el mismo cuerpo del bucle de entrenamiento en version StridedBatched; se aisla en
-//una funcion para poder capturarlo como CUDA graph sin duplicar el bloque.
-void trainStepBatched(cublasHandle_t handle, cudaStream_t stream, int l, const int* dim,
-                      int M, int B, float** d_W, float** d_WV, float** d_B, float** d_BV,
-                      float** d_ev, float** d_d, float* d_yhat, float* d_1M,
-                      float Paso, float Gamma, float multi){
-    //SGEMM: C = aAB+bC
-    float alpha = 1.0f, beta = 1.0f;
-    for(int i=0; i<l; i++){
-        cuCopyRepeatedBatched<<<(M*dim[i+1]*B+255)/256, 256, 0, stream>>>(d_ev[i+1], d_B[i], dim[i+1], M, M, B);
-        cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N, dim[i+1], M, dim[i], &alpha,
-            d_W[i], dim[i+1], (long long)dim[i+1]*dim[i],
-            d_ev[i], dim[i], (long long)dim[i]*M,
-            &beta, d_ev[i+1], dim[i+1], (long long)dim[i+1]*M, B);
-        cuSigmoid<<<(M*dim[i+1]*B+255)/256, 256, 0, stream>>>(d_ev[1+i], dim[i+1] * M * B);
-    }
-
-    //Backpropagation formal.
-    alpha = 1.0f; beta = -1.0f;
-    cublasSgeam(handle, CUBLAS_OP_N, CUBLAS_OP_N, dim[l], M*B, &alpha, d_ev[l], dim[l], &beta,  d_yhat,  dim[l], d_d[l-1], dim[l]);
-
-    cuDSigmoidHadamard<<<(M*dim[l]*B+255)/256, 256, 0, stream>>>(d_d[l-1], d_ev[l], dim[l] * M * B);
-
-    //Ahora si en automatico
-    alpha=1.0f; beta = 0.0f;
-    for(int i=0; i<l-1; i++){
-        cublasSgemmStridedBatched(handle, CUBLAS_OP_T, CUBLAS_OP_N, dim[l-i-1], M, dim[l-i], &alpha,
-            d_W[l-i-1], dim[l-i], (long long)dim[l-i]*dim[l-i-1],
-            d_d[l-i-1], dim[l-i], (long long)dim[l-i]*M,
-            &beta, d_d[l-i-2], dim[l-i-1], (long long)dim[l-i-1]*M, B);
-        cuDSigmoidHadamard<<<(M*dim[l-i-1]*B+255)/256, 256, 0, stream>>>(d_d[l-i-2], d_ev[l-i-1], dim[l-i-1] * M * B);
-    }
-
-    //Terminamos con los gradiantes y actualizamos los pesos
-    float neg = -1.0;
-    alpha = (Paso*multi)/(M); beta = Gamma;
-    for(int i=0; i<l; i++){
-        cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_T, dim[i+1], dim[i], M, &alpha,
-            d_d[i], dim[i+1], (long long)dim[i+1]*M,
-            d_ev[i], dim[i], (long long)dim[i]*M,
-            &beta, d_WV[i], dim[i+1], (long long)dim[i+1]*dim[i], B);
-        cublasSaxpy(handle, dim[i+1]*dim[i]*B, &neg, d_WV[i], 1, d_W[i], 1);
-
-        cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_T, dim[i+1], 1, M, &alpha,
-            d_d[i], dim[i+1], (long long)dim[i+1]*M,
-            d_1M, 1, (long long)0,
-            &beta, d_BV[i], dim[i+1], (long long)dim[i+1]*1, B);
-        cublasSaxpy(handle, dim[i+1]*B, &neg, d_BV[i], 1, d_B[i], 1);
-    }
-}
-
 int main_test(int M, int m, int L, const int* dim, int B) {
     time_t semilla = time(NULL);
     srand(semilla * 1000000);
@@ -222,6 +171,15 @@ int main_test(int M, int m, int L, const int* dim, int B) {
     fclose(fp);
 
     int l = L-1;
+
+    //Cadena de arquitectura ("_2_3_3_1_") y carpeta donde iran los pesos de esta corrida
+    int offset_arq = 1;
+    char arquitectura[128] = "_";
+    for(int i=0; i<L; i++){
+      offset_arq += sprintf(arquitectura+offset_arq, "%d_", dim[i]);
+    }
+    char pesos_dir[192], ruta[256];
+    sprintf(pesos_dir, "Bin/Pesos/%s%ld_b%d", arquitectura, (long)semilla, B);
 
     //Preparación de datos para el backpropagation
     //Los PESOS (B réplicas contiguas por capa: red 0, red 1, ... red B-1)
@@ -268,6 +226,21 @@ int main_test(int M, int m, int L, const int* dim, int B) {
 
       cudaMalloc(&d_BV[i], szB * B * sizeof(float));
       cudaMemcpy(d_BV[i], h_B[i], szB * B * sizeof(float), cudaMemcpyHostToDevice);
+    }
+
+    //Guardar pesos INICIALES en Bin/Pesos/<arq>_<seed>_b<B>/ini/{W<i>,b<i>}/<filas>x<cols>.bin
+    //Cada .bin lleva las B replicas contiguas, mismo layout que en memoria.
+    _mkdir("Bin/Pesos");
+    _mkdir(pesos_dir);
+    sprintf(ruta, "%s/ini", pesos_dir); _mkdir(ruta);
+    for(int i=0; i<l; i++){
+        sprintf(ruta, "%s/ini/W%d", pesos_dir, i); _mkdir(ruta);
+        sprintf(ruta, "%s/ini/W%d/%dx%d.bin", pesos_dir, i, dim[i+1], dim[i]);
+        fp = fopen(ruta, "wb"); fwrite(h_W[i], sizeof(float), (size_t)dim[i]*dim[i+1]*B, fp); fclose(fp);
+
+        sprintf(ruta, "%s/ini/b%d", pesos_dir, i); _mkdir(ruta);
+        sprintf(ruta, "%s/ini/b%d/%dx1.bin", pesos_dir, i, dim[i+1]);
+        fp = fopen(ruta, "wb"); fwrite(h_B[i], sizeof(float), (size_t)dim[i+1]*B, fp); fclose(fp);
     }
 
     //Variables temporales para el backpropagation
@@ -337,21 +310,71 @@ int main_test(int M, int m, int L, const int* dim, int B) {
 
     float multi = powf(MultiProfunda, L-3);
 
-    //Se hace un paso "en vivo" (n=0) para forzar toda inicializacion diferida, luego se
-    //captura un paso identico (n=1) como CUDA graph y el resto del bucle solo reproduce
-    //ese graph, que es lo que elimina el overhead de lanzamiento por iteracion.
+    //El paso se corre 2 veces fuera del entrenamiento: n=0 en vivo (fuerza toda la
+    //inicializacion diferida de cuBLAS y de los kernels, que esta prohibida durante la
+    //captura) y n=1 grabandolo como CUDA graph. El bucle de entrenamiento (n>=2) solo
+    //reproduce el graph, que es lo que quita el overhead de lanzar orden por orden.
     cudaGraph_t graph;
     cudaGraphExec_t graexec;
 
-    trainStepBatched(handle, stream, l, dim, M, B, d_W, d_WV, d_B, d_BV, d_ev, d_d, d_yhat, d_1M, Paso, Gamma, multi);
-    cudaStreamSynchronize(stream);
-
-    cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal);
-    trainStepBatched(handle, stream, l, dim, M, B, d_W, d_WV, d_B, d_BV, d_ev, d_d, d_yhat, d_1M, Paso, Gamma, multi);
-    cudaStreamEndCapture(stream, &graph);
-    cudaGraphInstantiate(&graexec, graph, NULL, NULL, 0);
-
     int n;
+    for(n = 0; n < 2; n++){
+
+        if (n == 1) {
+            cudaStreamSynchronize(stream);
+            cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal);
+        }
+
+        //SGEMM: C = aAB+bC
+        float alpha = 1.0f, beta = 1.0f;
+        for(int i=0; i<l; i++){
+            cuCopyRepeatedBatched<<<(M*dim[i+1]*B+255)/256, 256, 0, stream>>>(d_ev[i+1], d_B[i], dim[i+1], M, M, B);
+            cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_N, dim[i+1], M, dim[i], &alpha,
+                d_W[i], dim[i+1], (long long)dim[i+1]*dim[i],
+                d_ev[i], dim[i], (long long)dim[i]*M,
+                &beta, d_ev[i+1], dim[i+1], (long long)dim[i+1]*M, B);
+            cuSigmoid<<<(M*dim[i+1]*B+255)/256, 256, 0, stream>>>(d_ev[1+i], dim[i+1] * M * B);
+        }
+
+        //Backpropagation formal.
+        alpha = 1.0f; beta = -1.0f;
+        cublasSgeam(handle, CUBLAS_OP_N, CUBLAS_OP_N, dim[l], M*B, &alpha, d_ev[l], dim[l], &beta,  d_yhat,  dim[l], d_d[l-1], dim[l]);
+
+        cuDSigmoidHadamard<<<(M*dim[l]*B+255)/256, 256, 0, stream>>>(d_d[l-1], d_ev[l], dim[l] * M * B);
+
+        //Ahora si en automatico
+        alpha=1.0f; beta = 0.0f;
+        for(int i=0; i<l-1; i++){
+            cublasSgemmStridedBatched(handle, CUBLAS_OP_T, CUBLAS_OP_N, dim[l-i-1], M, dim[l-i], &alpha,
+                d_W[l-i-1], dim[l-i], (long long)dim[l-i]*dim[l-i-1],
+                d_d[l-i-1], dim[l-i], (long long)dim[l-i]*M,
+                &beta, d_d[l-i-2], dim[l-i-1], (long long)dim[l-i-1]*M, B);
+            cuDSigmoidHadamard<<<(M*dim[l-i-1]*B+255)/256, 256, 0, stream>>>(d_d[l-i-2], d_ev[l-i-1], dim[l-i-1] * M * B);
+        }
+
+        //Terminamos con los gradiantes y actualizamos los pesos
+        float neg = -1.0;
+        alpha = (Paso*multi)/(M); beta = Gamma;
+        for(int i=0; i<l; i++){
+            cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_T, dim[i+1], dim[i], M, &alpha,
+                d_d[i], dim[i+1], (long long)dim[i+1]*M,
+                d_ev[i], dim[i], (long long)dim[i]*M,
+                &beta, d_WV[i], dim[i+1], (long long)dim[i+1]*dim[i], B);
+            cublasSaxpy(handle, dim[i+1]*dim[i]*B, &neg, d_WV[i], 1, d_W[i], 1);
+
+            cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_T, dim[i+1], 1, M, &alpha,
+                d_d[i], dim[i+1], (long long)dim[i+1]*M,
+                d_1M, 1, (long long)0,
+                &beta, d_BV[i], dim[i+1], (long long)dim[i+1]*1, B);
+            cublasSaxpy(handle, dim[i+1]*B, &neg, d_BV[i], 1, d_B[i], 1);
+        }
+
+        if (n == 1) {
+            cudaStreamEndCapture(stream, &graph);
+            cudaGraphInstantiate(&graexec, graph, NULL, NULL, 0);
+        }
+    }
+
     for(n = 2; n < Iteraciones; n++){
         cudaGraphLaunch(graexec, stream);
 
@@ -370,16 +393,25 @@ int main_test(int M, int m, int L, const int* dim, int B) {
     }
     cudaStreamSynchronize(stream);
 
+    //Guardar pesos FINALES, misma estructura pero en la subcarpeta fin/
+    sprintf(ruta, "%s/fin", pesos_dir); _mkdir(ruta);
+    for(int i=0; i<l; i++){
+        cudaMemcpy(h_W[i], d_W[i], (size_t)dim[i]*dim[i+1]*B*sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(h_B[i], d_B[i], (size_t)dim[i+1]*B*sizeof(float), cudaMemcpyDeviceToHost);
+
+        sprintf(ruta, "%s/fin/W%d", pesos_dir, i); _mkdir(ruta);
+        sprintf(ruta, "%s/fin/W%d/%dx%d.bin", pesos_dir, i, dim[i+1], dim[i]);
+        fp = fopen(ruta, "wb"); fwrite(h_W[i], sizeof(float), (size_t)dim[i]*dim[i+1]*B, fp); fclose(fp);
+
+        sprintf(ruta, "%s/fin/b%d", pesos_dir, i); _mkdir(ruta);
+        sprintf(ruta, "%s/fin/b%d/%dx1.bin", pesos_dir, i, dim[i+1]);
+        fp = fopen(ruta, "wb"); fwrite(h_B[i], sizeof(float), (size_t)dim[i+1]*B, fp); fclose(fp);
+    }
+
     //Muestra el Train
     // Copiar el resultado de la última capa a la CPU
     float scores[3];
     cudaMemcpy(y, d_ev[l], dim[l]*M*B*sizeof(float), cudaMemcpyDeviceToHost);
-
-    int offset_arq = 1;
-    char arquitectura[128] = "_";
-    for(int i=0; i<L; i++){
-      offset_arq += sprintf(arquitectura+offset_arq, "%d_", dim[i]);
-    }
 
     //EVALUAMOS EL TEST (ASUMIMOS m<=M)
     sprintf(fpath, "Bin/Test/X/%dx%d.bin", N, m);
