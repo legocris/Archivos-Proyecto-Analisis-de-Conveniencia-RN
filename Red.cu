@@ -4,7 +4,15 @@
 #include <cublas_v2.h>
 #include <stdio.h>
 #include <time.h>
+#if defined(_WIN32)
 #include <direct.h>
+#else
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+#define _mkdir(p) mkdir(p, 0755)
+#define _chdir chdir
+#endif
 
 float Paso = 0.2;
 float Gamma = 0.0;
