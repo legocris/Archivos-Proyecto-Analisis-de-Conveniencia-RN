@@ -1,4 +1,5 @@
 import os
+import sys
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -10,6 +11,10 @@ import seaborn as sns
 # Límite de iteraciones: se descartan los registros que lo superen
 # y además fija el tope del eje Y en la gráfica de eficiencia.
 MAX_ITERACIONES = 100_000
+
+# Etiqueta del problema para el título de las gráficas.
+# En main se ajusta a la carpeta pedida; por defecto, la actual.
+ETIQUETA_PROBLEMA = os.path.basename(os.getcwd())
 
 # ==========================================
 # 1. PARSER DE LOGS
@@ -171,7 +176,7 @@ def plot_comparison(df_subset, n_neurons, output_folder):
     # Configurar estilo
     sns.set(style="whitegrid")
     fig, axes = plt.subplots(1, 2, figsize=(16, 7))
-    fig.suptitle(f'Análisis: {n_neurons} Neuronas Totales {os.path.basename(os.getcwd())}', fontsize=16)
+    fig.suptitle(f'Análisis: {n_neurons} Neuronas Totales {ETIQUETA_PROBLEMA}', fontsize=16)
 
     # Colores base para las cajas (Azul Angosta, Rojo Profunda)
     # Creamos un diccionario de paleta basado en la columna 'tipo'
@@ -233,13 +238,33 @@ def plot_comparison(df_subset, n_neurons, output_folder):
 # MAIN
 # ==========================================
 
+def mostrar_ayuda(nombre_programa):
+    print(f"Uso: {nombre_programa} [CARPETA]")
+    print("  CARPETA  Directorio del problema (opcional, primer argumento). Por defecto: el actual.")
+    print("  Lee los registros de CARPETA/Reg y escribe los resultados en CARPETA/Res.")
+
 if __name__ == "__main__":
+    # Primer argumento opcional: la carpeta del problema (si no empieza con '-'),
+    # igual que en Red.cu. Reg/ y Res/ quedan relativos a ella.
+    CARPETA = "."
+    args = sys.argv[1:]
+    if args:
+        if args[0] in ("-h", "--ayuda"):
+            mostrar_ayuda(sys.argv[0])
+            sys.exit(0)
+        if args[0].startswith("-"):
+            print(f"Error: Argumento desconocido: {args[0]}")
+            mostrar_ayuda(sys.argv[0])
+            sys.exit(1)
+        CARPETA = args[0]
+
     # RUTA DE ENTRADA
-    PATH_REG = "./Reg"  # <--- AJUSTA ESTO SI ES NECESARIO
-    
-    
+    PATH_REG = os.path.join(CARPETA, "Reg")
+
     # RUTA DE SALIDA (RESULTADOS)
-    PATH_RES = os.path.join(os.path.dirname(PATH_REG), "Res")
+    PATH_RES = os.path.join(CARPETA, "Res")
+
+    ETIQUETA_PROBLEMA = os.path.basename(os.path.abspath(CARPETA)) or CARPETA
     
     if not os.path.exists(PATH_REG):
         print(f"Error: No existe la carpeta {PATH_REG}")
