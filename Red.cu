@@ -238,6 +238,8 @@ int main_test(int M, int m, int L, const int* dim, int B) {
 
     //Guardar pesos INICIALES en Bin/Pesos/<arq>_<seed>_b<B>/ini/{W<i>,b<i>}/<filas>x<cols>.bin
     //Cada .bin lleva las B replicas contiguas, mismo layout que en memoria.
+    _mkdir("Bin");
+    _mkdir("Reg");
     _mkdir("Bin/Pesos");
     _mkdir(pesos_dir);
     sprintf(ruta, "%s/ini", pesos_dir); _mkdir(ruta);
