@@ -11,7 +11,8 @@ def save_to_bin(name, X, y):
     Saves datasets for CUDA processing.
 
     Format:
-    - Content: Transposed (Features x Samples) -> For CUDA Coalesced Access.
+    - Content: (Samples, Features) in C order, which is exactly the
+      (Features x Samples) column-major layout that Red.cu/cuBLAS expect.
     - Filename: Features x Samples.bin
     """
 
@@ -44,23 +45,24 @@ def save_to_bin(name, X, y):
 
     # 6. Save Files
     # Formula: Filename = N_Features x M_Samples
-    #          Content  = Transposed Matrix (.T)
+    #          Content  = C-order bytes of (Samples, Features), i.e. CUDA
+    #          column-major (Features x Samples). NO extra transpose here.
 
     # --- Train X ---
     fn = f"{paths['train_x']}/{X_train.shape[1]}x{X_train.shape[0]}.bin"
-    X_train.T.tofile(fn)
+    X_train.tofile(fn)
 
     # --- Train Y ---
     fn = f"{paths['train_y']}/{y_train.shape[1]}x{y_train.shape[0]}.bin"
-    y_train.T.tofile(fn)
+    y_train.tofile(fn)
 
     # --- Test X ---
     fn = f"{paths['test_x']}/{X_test.shape[1]}x{X_test.shape[0]}.bin"
-    X_test.T.tofile(fn)
+    X_test.tofile(fn)
 
     # --- Test Y ---
     fn = f"{paths['test_y']}/{y_test.shape[1]}x{y_test.shape[0]}.bin"
-    y_test.T.tofile(fn)
+    y_test.tofile(fn)
 
     print(f"[{name}] Exported.")
     print(f"   Train File: {X_train.shape[1]}x{X_train.shape[0]}.bin (Features x Samples)")
