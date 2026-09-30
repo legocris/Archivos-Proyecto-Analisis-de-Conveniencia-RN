@@ -10,7 +10,7 @@ import seaborn as sns
 
 # Límite de iteraciones: se descartan los registros que lo superen
 # y además fija el tope del eje Y en la gráfica de eficiencia.
-MAX_ITERACIONES = 100_000
+MAX_ITERACIONES = 200_000
 
 # Etiqueta del problema para el título de las gráficas.
 # En main se ajusta a la carpeta pedida; por defecto, la actual.

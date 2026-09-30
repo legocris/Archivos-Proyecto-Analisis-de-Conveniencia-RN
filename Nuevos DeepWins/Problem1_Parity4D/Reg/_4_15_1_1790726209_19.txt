@@ -1,0 +1,30 @@
+
+Arquitectura: _4_15_1_
+Semilla: 1790726209
+Segundos: 58
+NIteraciones: 200000
+
+Costo_train: 0.130488
+Precision_train: 0.819427
+Recall_train: 0.814356
+F1_train: 0.816884
+
+Costo_test: 0.127834
+Precision_test: 0.830769
+Recall_test: 0.835052
+F1_test: 0.832905
+ 
+Paso: 0.200000
+Gamma: 0.000000
+Parada: 0.100000
+Iteraciones: 200000
+CapasDesde: 2
+CapasHasta: 5
+Repeticiones: 1
+Intervalo: 10000
+Batch: 20
+MultiplicadorProfunda: 0.700000
+Tarjeta: Tesla T4
+
+Costos:
+0.2493460.2493400.2493330.2493240.2493130.2492990.2492790.2492490.2491970.2490870.2487220.2466890.2393560.2282750.2146780.1925750.1673810.1524930.143187
